@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Upstream drift check for the pstack opencode port.
 
-Fetches upstream pstack/ (from the original backnotprop/pstack repo or a
-local checkout), applies the port's mechanical convention mapping
+Fetches upstream pstack/ (from git's cursor/plugins monorepo or a local
+checkout), applies the port's mechanical convention mapping
 (Cursor -> ZCode -> opencode, deterministic substitutions only), diffs the
 mapped copy against this repo's skills/ and agents/, and reports what
 upstream changed that we have not absorbed.
@@ -13,13 +13,14 @@ listed in SEMANTIC below and flagged [SEMANTIC] in the report so a human
 re-applies those edits when upstream touches them.
 
 Usage:
-    python3 scripts/check-upstream.py                    # default: github.com/backnotprop/pstack
+    python3 scripts/check-upstream.py                    # default: github.com/cursor/plugins
     python3 scripts/check-upstream.py /path/to/pstack-monorepo
     python3 scripts/check-upstream.py /path/to/pstack --out /tmp/report
 
 Exit status: 0 on a completed check (even when drift is found),
 2 on operational failure (bad source, clone failure, timeout).
 """
+
 import argparse
 import difflib
 import pathlib
@@ -31,7 +32,7 @@ import tempfile
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 CLONE_TIMEOUT = 300  # seconds for the shallow clone
-DEFAULT_SOURCE = "https://github.com/backnotprop/pstack"
+DEFAULT_SOURCE = "https://github.com/cursor/plugins"
 
 # ---------------------------------------------------------------------------
 # Mechanical mapping. Applied in order to a copy of upstream pstack/.
@@ -50,7 +51,10 @@ LAYER1_CURSOR_TO_ZCODE = [
     # benny install paths: Cursor automations dir -> ZCode non-scanned automations dir
     (".cursor/automations/benny/skills/", ".zcode/automations/benny/skills/"),
     (".cursor/automations/benny/", ".zcode/automations/benny/"),
-    ("<target-repository>/.cursor/automations/benny/", "<target-repository>/.zcode/automations/benny/"),
+    (
+        "<target-repository>/.cursor/automations/benny/",
+        "<target-repository>/.zcode/automations/benny/",
+    ),
     (".cursor/automations/", ".zcode/automations/"),
     # benny user-owned config location
     (".cursor/benny/", ".zcode/benny/"),
@@ -61,6 +65,9 @@ LAYER1_CURSOR_TO_ZCODE = [
     ("~/.cursor/skills/", "~/.zcode/skills/"),
     # pstack role config file
     ("~/.cursor/rules/pstack-models.mdc", "~/.zcode/pstack-roles.md"),
+    # bare filename form upstream uses in skill bodies ("the `pstack-models.mdc` rule")
+    ("`pstack-models.mdc`", "`pstack-roles.md`"),
+    ("pstack-models.mdc", "pstack-roles.md"),
     # tool names
     ("Task subagent", "Agent subagent"),
     ("Task tool", "Agent tool"),
@@ -69,10 +76,18 @@ LAYER1_CURSOR_TO_ZCODE = [
     ("`Task`", "`Agent`"),
     ("AskQuestion", "AskUserQuestion"),
     # skill authoring built-in
-    ("Cursor's built-in `create-skill` skill", "the `skill-creator` skill (from the `skill-creator` plugin)"),
-    ("Cursor's built-in `create-skill`", "the `skill-creator` skill (from the `skill-creator` plugin)"),
-    ("**create-skill** skill (Cursor's built-in for authoring SKILL.md files)",
-     "**skill-creator** skill (from the `skill-creator` plugin, for authoring SKILL.md files)"),
+    (
+        "Cursor's built-in `create-skill` skill",
+        "the `skill-creator` skill (from the `skill-creator` plugin)",
+    ),
+    (
+        "Cursor's built-in `create-skill`",
+        "the `skill-creator` skill (from the `skill-creator` plugin)",
+    ),
+    (
+        "**create-skill** skill (Cursor's built-in for authoring SKILL.md files)",
+        "**skill-creator** skill (from the `skill-creator` plugin, for authoring SKILL.md files)",
+    ),
     ("`/create-skill`", "`/skill-creator`"),
     # cloud agents -> background subagents
     ("One Cursor cloud agent per PR", "One background subagent per PR"),
@@ -81,61 +96,104 @@ LAYER1_CURSOR_TO_ZCODE = [
     ("configured Cursor Slack actions", "configured Slack MCP tools"),
     ("Prefer configured Cursor Slack actions", "Prefer configured Slack MCP tools"),
     # transcript paths, generalPurpose type name, plugin cache paths
-    ("substituting `generalPurpose` skips that read and drifts",
-     "substituting `general-purpose` skips that read and drifts"),
-    ("`generalPurpose` is the fallback. Never use the built-in `plan` subagent_type; it ignores this skill.",
-     "`general-purpose` is the fallback."),
+    (
+        "substituting `generalPurpose` skips that read and drifts",
+        "substituting `general-purpose` skips that read and drifts",
+    ),
+    (
+        "`generalPurpose` is the fallback. Never use the built-in `plan` subagent_type; it ignores this skill.",
+        "`general-purpose` is the fallback.",
+    ),
     # plugin-installed skill paths
-    ("plugin-installed paths under `~/.cursor/plugins/`",
-     "plugin-installed paths under `~/.zcode/cli/plugins/cache/`"),
+    (
+        "plugin-installed paths under `~/.cursor/plugins/`",
+        "plugin-installed paths under `~/.zcode/cli/plugins/cache/`",
+    ),
     # transcript scope: opencode stores sessions as rows in a SQLite DB, not
     # files in a directory, so "glob the transcripts dir" becomes "read the
     # workspace's sessions"
-    ("do not glob across `~/.cursor/projects/*/`, that crosses workspace boundaries and reads private chats from unrelated projects",
-     "do not read other workspaces' sessions, that crosses workspace boundaries and reads private chats from unrelated projects"),
-    ("Do not glob across `~/.cursor/projects/*/`; that crosses workspace boundaries and reads private chats from unrelated projects.",
-     "Do not read other workspaces' sessions; that crosses workspace boundaries and reads private chats from unrelated projects."),
-    ("do not glob across `~/.cursor/projects/*/`, that crosses workspace boundaries",
-     "do not read other workspaces' sessions, that crosses workspace boundaries"),
-    ("Don't glob across `~/.cursor/projects/*/`; that reads unrelated private chats.",
-     "Don't read other workspaces' sessions; that reads unrelated private chats."),
-    ("Don't glob across `~/.cursor/projects/*/`. That crosses workspace boundaries and reads private chats from unrelated projects.",
-     "Don't read other workspaces' sessions. That crosses workspace boundaries and reads private chats from unrelated projects."),
-    ("Do not glob across `~/.cursor/projects/*/`. That crosses workspace boundaries and reads private chats from unrelated projects.",
-     "Do not read other workspaces' sessions. That crosses workspace boundaries and reads private chats from unrelated projects."),
+    (
+        "do not glob across `~/.cursor/projects/*/`, that crosses workspace boundaries and reads private chats from unrelated projects",
+        "do not read other workspaces' sessions, that crosses workspace boundaries and reads private chats from unrelated projects",
+    ),
+    (
+        "Do not glob across `~/.cursor/projects/*/`; that crosses workspace boundaries and reads private chats from unrelated projects.",
+        "Do not read other workspaces' sessions; that crosses workspace boundaries and reads private chats from unrelated projects.",
+    ),
+    (
+        "do not glob across `~/.cursor/projects/*/`, that crosses workspace boundaries",
+        "do not read other workspaces' sessions, that crosses workspace boundaries",
+    ),
+    (
+        "Don't glob across `~/.cursor/projects/*/`; that reads unrelated private chats.",
+        "Don't read other workspaces' sessions; that reads unrelated private chats.",
+    ),
+    (
+        "Don't glob across `~/.cursor/projects/*/`. That crosses workspace boundaries and reads private chats from unrelated projects.",
+        "Don't read other workspaces' sessions. That crosses workspace boundaries and reads private chats from unrelated projects.",
+    ),
+    (
+        "Do not glob across `~/.cursor/projects/*/`. That crosses workspace boundaries and reads private chats from unrelated projects.",
+        "Do not read other workspaces' sessions. That crosses workspace boundaries and reads private chats from unrelated projects.",
+    ),
     # transcript location: the ZCode port mapped these to a `~/.zcode/cli/`
     # directory that opencode never had; map straight to the session DB
-    ("The system prompt names the workspace's `agent-transcripts/` directory. Use only that path.",
-     "The current workspace's sessions live in `~/.local/share/opencode/opencode.db` (query with `sqlite3` in read-only mode). Use only the current workspace's sessions."),
-    ("The system prompt names the active workspace's `agent-transcripts/` directory; use that path.",
-     "The active workspace's sessions live in `~/.local/share/opencode/opencode.db` (query with `sqlite3` in read-only mode); use that workspace's sessions."),
+    (
+        "The system prompt names the workspace's `agent-transcripts/` directory. Use only that path.",
+        "The current workspace's sessions live in `~/.local/share/opencode/opencode.db` (query with `sqlite3` in read-only mode). Use only the current workspace's sessions.",
+    ),
+    (
+        "The system prompt names the active workspace's `agent-transcripts/` directory; use that path.",
+        "The active workspace's sessions live in `~/.local/share/opencode/opencode.db` (query with `sqlite3` in read-only mode); use that workspace's sessions.",
+    ),
     # parenthetical variants, most specific first (a shorter left side is a
     # prefix of a longer one and would eat it)
-    ("the active workspace's `agent-transcripts/` directory (the system prompt names the path; use that path)",
-     "the active workspace's sessions in `~/.local/share/opencode/opencode.db` (query with `sqlite3` in read-only mode; use only that workspace)"),
-    ("the active workspace's `agent-transcripts/` directory (the system prompt names the path; ",
-     "the active workspace's sessions in `~/.local/share/opencode/opencode.db` (query with `sqlite3` in read-only mode; "),
-    ("the active workspace's `agent-transcripts/` directory (the system prompt names this path)",
-     "the active workspace's sessions in `~/.local/share/opencode/opencode.db` (query with `sqlite3` in read-only mode)"),
-    ("the active workspace's `agent-transcripts/` directory (the system prompt names the path)",
-     "the active workspace's sessions in `~/.local/share/opencode/opencode.db` (query with `sqlite3` in read-only mode)"),
-    ("reading local transcripts under `agent-transcripts/`",
-     "reading local transcripts"),
+    (
+        "the active workspace's `agent-transcripts/` directory (the system prompt names the path; use that path)",
+        "the active workspace's sessions in `~/.local/share/opencode/opencode.db` (query with `sqlite3` in read-only mode; use only that workspace)",
+    ),
+    (
+        "the active workspace's `agent-transcripts/` directory (the system prompt names the path; ",
+        "the active workspace's sessions in `~/.local/share/opencode/opencode.db` (query with `sqlite3` in read-only mode; ",
+    ),
+    (
+        "the active workspace's `agent-transcripts/` directory (the system prompt names this path)",
+        "the active workspace's sessions in `~/.local/share/opencode/opencode.db` (query with `sqlite3` in read-only mode)",
+    ),
+    (
+        "the active workspace's `agent-transcripts/` directory (the system prompt names the path)",
+        "the active workspace's sessions in `~/.local/share/opencode/opencode.db` (query with `sqlite3` in read-only mode)",
+    ),
+    (
+        "the active workspace's `agent-transcripts/` directory (the system prompt names the path. Do not glob across `~/.cursor/projects/*/`, that crosses workspace boundaries and reads private chats from unrelated projects)",
+        "the active workspace's sessions in `~/.local/share/opencode/opencode.db` (query with `sqlite3` in read-only mode; use only that workspace, do not read other workspaces' sessions, that crosses workspace boundaries and reads private chats from unrelated projects)",
+    ),
+    (
+        "reading local transcripts under `agent-transcripts/`",
+        "reading local transcripts",
+    ),
     # worktree location example
-    ("since a hand-typed `myrepo-worktrees/x` misses one that lives at `.cursor/worktrees/myrepo/x`",
-     "since a hand-typed `myrepo-worktrees/x` misses one that agent tooling placed under its own state directory"),
+    (
+        "since a hand-typed `myrepo-worktrees/x` misses one that lives at `.cursor/worktrees/myrepo/x`",
+        "since a hand-typed `myrepo-worktrees/x` misses one that agent tooling placed under its own state directory",
+    ),
 ]
 
 LAYER2_ZCODE_TO_OPENCODE = [
     # background spawn phrasing (most specific first)
-    ("a background subagent (`run_in_background: true`)",
-     "a subagent spawned with `background: true`"),
+    (
+        "a background subagent (`run_in_background: true`)",
+        "a subagent spawned with `background: true`",
+    ),
     ("Background agents cannot see this chat", "Subagents cannot see this chat"),
     ("wipe AskUserQuestion state", "wipe `question` state"),
     # user-question tool (phrase-level rules first: the bare-name rule below
     # doubles or drops the verb in these constructions)
     ("About to `AskUserQuestion` on a", "About to use the `question` tool on a"),
-    ("Prefer AskUserQuestion over free text", "Prefer the `question` tool over free text"),
+    (
+        "Prefer AskUserQuestion over free text",
+        "Prefer the `question` tool over free text",
+    ),
     ("the `AskUserQuestion` tool", "the `question` tool"),
     ("`AskUserQuestion`", "the `question` tool"),
     ("run_in_background: true", "background: true"),
@@ -161,23 +219,33 @@ LAYER2_ZCODE_TO_OPENCODE = [
     ("`Explore`", "`explore`"),
     ('subagent_type: "Explore"', 'subagent_type: "explore"'),
     # paths: skills, agents, roles file, plugins, MCP
-    ("plugin-installed paths under `~/.zcode/cli/plugins/cache/`",
-     "plugin paths configured via `plugin` in opencode.json"),
-    ("`mcp.servers` in `~/.zcode/cli/config.json` (user scope), then `mcp.servers` in the workspace `.zcode/config.json` (or the `.agents/mcp.json` fallback)",
-     "`mcp` in `~/.config/opencode/opencode.json` (user scope), then `mcp` in the project `opencode.json`"),
+    (
+        "plugin-installed paths under `~/.zcode/cli/plugins/cache/`",
+        "plugin paths configured via `plugin` in opencode.json",
+    ),
+    (
+        "`mcp.servers` in `~/.zcode/cli/config.json` (user scope), then `mcp.servers` in the workspace `.zcode/config.json` (or the `.agents/mcp.json` fallback)",
+        "`mcp` in `~/.config/opencode/opencode.json` (user scope), then `mcp` in the project `opencode.json`",
+    ),
     ("the `mcp__*` tools", "the MCP tools (named `<server>_<tool>`)"),
     ("~/.zcode/pstack-roles.md", "~/.config/opencode/pstack-roles.md"),
     ("~/.zcode/cli/agents/", "~/.config/opencode/agents/"),
     ("~/.zcode/skills/", "~/.config/opencode/skills/"),
     (".zcode/skills/", ".opencode/skills/"),
-    ("stale entries under `~/.zcode/cli/` (`image-cache/`, old `artifacts/`)",
-     "stale entries under `~/.local/share/opencode/` (old session DBs, artifacts)"),
+    (
+        "stale entries under `~/.zcode/cli/` (`image-cache/`, old `artifacts/`)",
+        "stale entries under `~/.local/share/opencode/` (old session DBs, artifacts)",
+    ),
     # orchestrate conventions
-    ("in the current agent's store (path in the system prompt)",
-     "at the repo root (project-local, committed or gitignored per project convention)"),
+    (
+        "in the current agent's store (path in the system prompt)",
+        "at the repo root (project-local, committed or gitignored per project convention)",
+    ),
     ("cross-model review", "cross-type review"),
-    ("a dedicated verifier agent (on a different model family than the worker)",
-     "a dedicated verifier agent (a different subagent type than the worker)"),
+    (
+        "a dedicated verifier agent (on a different model family than the worker)",
+        "a dedicated verifier agent (a different subagent type than the worker)",
+    ),
     ("retry on a different model", "retry on a different subagent type"),
     # product name (bot-author strings like "cursor" are intentionally untouched)
     ("ZCode", "opencode"),
@@ -190,18 +258,36 @@ MAP_RULES = LAYER1_CURSOR_TO_ZCODE + LAYER2_ZCODE_TO_OPENCODE
 DMI_RE = re.compile(r"(?m)^(disable-model-invocation: true)\n")
 DMI_INSERT = r"\1\nmetadata:\n  opencode/autoinvoke: false\n"
 
-# V2 slash commands: the 23 skills whose upstream README documents slash
-# usage (4 model-invocable plus 19 manual-only) get an explicit `slash: true`
-# inserted as the LAST frontmatter key, reproducing the repo's key order:
-# name, description, then dmi, metadata, slash for dmi files. The V2 TUI
-# slash palette only lists skills that set the key explicitly (no default);
-# V1 ignores it (and V1 never lists skills in the / palette at all).
+# V2 slash commands: the 23 workflow skills whose upstream README documents
+# slash usage get an explicit `slash: true` inserted as the LAST frontmatter
+# key, reproducing the repo's key order: name, description, then dmi,
+# metadata, slash for dmi files. The V2 TUI slash palette only lists skills
+# that set the key explicitly (no default); V1 ignores it (and V1 never lists
+# skills in the / palette at all).
 SLASH_SKILLS = {
-    "poteto-mode", "how", "why", "recall", "blast-radius", "architect",
-    "arena", "swarm", "interrogate", "automate-me", "setup-pstack",
-    "reflect", "teach", "tdd", "no-comments", "typescript-best-practices",
-    "figure-it-out", "show-me-your-work", "create-verification-skill",
-    "maintain-verification-skill", "unslop", "bro", "technical-writing",
+    "poteto-mode",
+    "how",
+    "why",
+    "recall",
+    "blast-radius",
+    "architect",
+    "arena",
+    "swarm",
+    "interrogate",
+    "automate-me",
+    "setup-pstack",
+    "reflect",
+    "teach",
+    "tdd",
+    "no-comments",
+    "typescript-best-practices",
+    "figure-it-out",
+    "show-me-your-work",
+    "create-verification-skill",
+    "maintain-verification-skill",
+    "unslop",
+    "bro",
+    "technical-writing",
 }
 DESC_RE = re.compile(r"(?m)^(description: .*)\n")
 FM_RE = re.compile(r"(?ms)^---\n(.*?)\n---\n")
@@ -213,7 +299,9 @@ SLASH_INSERT = r"---\n\1\nslash: true\n---\n"
 # frontmatter, so the resulting key order is name, description, dmi,
 # metadata, slash regardless of insertion order.
 MANUAL_ONLY_INSERT = {"setup-pstack"}
-MANUAL_ONLY_INSERT_RE = r"\1\ndisable-model-invocation: true\nmetadata:\n  opencode/autoinvoke: false\n"
+MANUAL_ONLY_INSERT_RE = (
+    r"\1\ndisable-model-invocation: true\nmetadata:\n  opencode/autoinvoke: false\n"
+)
 
 # ---------------------------------------------------------------------------
 # Semantic port edits: one-off hand edits the mapping cannot reproduce.
@@ -228,39 +316,47 @@ SEMANTIC = {
     "skills/automate-me/SKILL.md": "transcript rewrite (SQLite) + question-tool option wording",
     "skills/blast-radius/SKILL.md": "multi-model panel wording -> subagent types",
     "skills/figure-it-out/SKILL.md": "'model family' -> 'subagent type' wording",
-    "skills/how/SKILL.md": "model-name defaults -> types + critic types are not read-only in opencode",
+    "skills/how/SKILL.md": "critics removed (upstream retired the role); explorer/explainer type wording; read-only types",
     "skills/interrogate/SKILL.md": "per-agent model override wording (agent.<name>.model)",
     "skills/interrogate/references/lead-judgment.md": "'models' -> 'reviewers' consensus wording",
     "skills/poteto-mode/SKILL.md": "model -> subagent-type defaults; deslop/cursor-team-kit/bugbot//loop rewrites; V1 experimental background note",
     "skills/poteto-mode/playbooks/autonomous-run.md": "ZCode cron automations rewritten to an OS-level cron/launchd wake",
-    "skills/poteto-mode/playbooks/autopilot-full.md": "cloud-sleeper wake -> scheduled automation; cursor-team-kit -> browser-use; deslop -> unslop",
-    "skills/poteto-mode/playbooks/autopilot-stack.md": "cloud-sleeper wake -> scheduled automation; deslop -> unslop; cloud division-of-labor wording",
-    "skills/poteto-mode/playbooks/babysit.md": "bugbot -> review-bot wording; /loop -> scheduled automation (Cron); cloud+local -> parallel",
+    "skills/poteto-mode/playbooks/autopilot-full.md": "forge-neutral gh/origin kept; /goal -> recorded objective; /loop -> scheduled automation (Cron); cursor-team-kit -> browser-use/shell; deslop -> unslop; Bugbot -> review bot",
+    "skills/poteto-mode/playbooks/autopilot-stack.md": "forge-neutral gh/origin kept; /goal -> recorded objective; /loop -> scheduled automation; deslop -> unslop; Bugbot -> review bot",
+    "skills/poteto-mode/playbooks/babysit.md": "forge-neutral gh/origin kept; bugbot -> review-bot wording; /loop -> scheduled automation (Cron); cloud+local -> parallel",
     "skills/poteto-mode/playbooks/bug-fix.md": "/loop -> scheduled automation (Cron); model -> role defaults",
     "skills/poteto-mode/playbooks/eval.md": "transcript rewrite (SQLite) + model -> subagent-type wording",
     "skills/poteto-mode/playbooks/feature.md": "model -> role defaults",
     "skills/poteto-mode/playbooks/hillclimb.md": "model -> role defaults",
-    "skills/poteto-mode/playbooks/opening-a-pr.md": "deslop -> unslop pass",
+    "skills/poteto-mode/playbooks/multi-phase-plan.md": "forge-neutral gh/origin; /goal -> recorded objective; /loop -> scheduled automation; control-ui/cli -> browser-use/shell; /deslop -> unslop; swarm-workers model -> type; pstack/skills paths -> installed skill paths",
+    "skills/poteto-mode/playbooks/opening-a-pr.md": "deslop -> unslop pass + forge-neutral gh/origin",
     "skills/poteto-mode/playbooks/orchestrate.md": "cloud environment -> background subagents; Cursor dashboard -> task output; store location",
     "skills/poteto-mode/playbooks/pause-safely.md": "'restart Cursor' -> 'restart the app'",
     "skills/poteto-mode/playbooks/perf-issue.md": "model -> role defaults",
     "skills/poteto-mode/playbooks/refactoring.md": "model -> role defaults",
     "skills/poteto-mode/playbooks/session-pickup.md": "transcript lookup rewritten to the SQLite session DB",
-    "skills/poteto-mode/playbooks/shipping.md": "control-ui/cli -> browser-use/shell; /loop -> scheduled automation (Cron)",
+    "skills/poteto-mode/playbooks/shipping.md": "forge-neutral gh/origin kept (Graphite no longer required); control-ui/cli -> browser-use/shell; /loop -> scheduled automation (Cron)",
     "skills/poteto-mode/playbooks/visual-parity.md": "control skill -> browser-use; /loop -> scheduled automation (Cron)",
     "skills/poteto-mode/playbooks/worktree-cleanup.md": "Cursor app-support cache paths -> opencode state paths",
     "skills/poteto-mode/references/bugbot-triage.md": "added 'Bugbot' definition sentence (Cursor's Bugbot, opencode's code-review agents)",
-    "skills/poteto-mode/references/plan.md": "model -> type defaults; control skills -> browser-use/shell; deslop -> unslop; babysit skill -> playbook",
+    "skills/poteto-mode/scripts/check-plan.mjs": "program markers/paths rewritten for the port (objective, installed skill paths, swarm workers type)",
     "skills/poteto-mode/scripts/worktree-audit.sh": "transcript lookup rewritten to the SQLite session DB",
     "skills/poteto-mode/scripts/watch-pr/github.ts": "env-configurable bot author/automation id (PSTACK_PR_AUTHOR, PSTACK_AUTOMATION_ID)",
     "skills/recall/SKILL.md": "transcript storage rewritten from JSONL rollouts to opencode's SQLite session DB",
     "skills/reflect/SKILL.md": "transcript rewrite (SQLite) + reviewer fan-out/type wording",
-    "skills/setup-pstack/SKILL.md": "rewritten for opencode built-ins + optional per-role model step",
+    "skills/setup-pstack/SKILL.md": "rewritten for opencode built-ins + reasoning budget folded into optional per-role model step",
     "skills/show-me-your-work/SKILL.md": "transcript rewrite (SQLite) + cross-type (not cross-model) review wording",
     "skills/swarm/SKILL.md": "cloud workers -> background subagents + model -> type spawn config",
+    "skills/typescript-best-practices/SKILL.md": "Cursor `paths:` frontmatter dropped (opencode does not use it)",
     "skills/why/SKILL.md": "MCP discovery rewritten for opencode + model/readonly lines -> type wording",
     "agents/poteto-agent.md": "is_background -> mode: all frontmatter + task_id resume sentence",
     "agents/comment-sicko.md": "mode: subagent frontmatter",
+}
+
+# Upstream files intentionally NOT ported. They stay ADDED-UPSTREAM in the
+# drift report; no action is needed when the report lists them.
+SKIPPED = {
+    "skills/make-bot-ui": "built on Cursor webhook routines and the Grok Bot sender key; no opencode equivalent",
 }
 
 
@@ -280,12 +376,19 @@ def run(cmd: list, timeout: int) -> None:
 
 def resolve_upstream_pstack(source: str, tmp: pathlib.Path) -> pathlib.Path:
     """Return the upstream pstack dir (must contain skills/)."""
-    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", source) or source.startswith("git@") or source.endswith(".git"):
+    if (
+        re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", source)
+        or source.startswith("git@")
+        or source.endswith(".git")
+    ):
         dest = tmp / "clone"
-        run(["git", "clone", "--depth", "1", source, str(dest)],
-            timeout=CLONE_TIMEOUT)
-        # in backnotprop/pstack (the original repo) pstack lives at the clone root
-        pstack = dest
+        run(["git", "clone", "--depth", "1", source, str(dest)], timeout=CLONE_TIMEOUT)
+        # cursor/plugins is a monorepo with pstack under pstack/; backnotprop
+        # and other mirrors put pstack at the clone root
+        if (dest / "pstack" / "skills").is_dir():
+            pstack = dest / "pstack"
+        else:
+            pstack = dest
     else:
         base = pathlib.Path(source).expanduser().resolve()
         if (base / "pstack" / "skills").is_dir():
@@ -293,8 +396,10 @@ def resolve_upstream_pstack(source: str, tmp: pathlib.Path) -> pathlib.Path:
         elif (base / "skills").is_dir():
             pstack = base
         else:
-            die(f"{source!r} is not a monorepo checkout (no pstack/skills/) "
-                f"nor a pstack dir (no skills/)")
+            die(
+                f"{source!r} is not a monorepo checkout (no pstack/skills/) "
+                f"nor a pstack dir (no skills/)"
+            )
     if not (pstack / "skills").is_dir():
         die(f"upstream pstack dir has no skills/: {pstack}")
     return pstack
@@ -346,8 +451,8 @@ def rel_files(root: pathlib.Path) -> set:
 
 def unified_diff(a: str, b: str, label_a: str, label_b: str) -> str:
     lines = difflib.unified_diff(
-        a.splitlines(), b.splitlines(),
-        fromfile=label_a, tofile=label_b, lineterm="")
+        a.splitlines(), b.splitlines(), fromfile=label_a, tofile=label_b, lineterm=""
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -361,12 +466,20 @@ def file_text(p: pathlib.Path) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Diff upstream pstack (after the port's mechanical mapping) "
-                    "against this repo and report drift.")
-    ap.add_argument("source", nargs="?", default=DEFAULT_SOURCE,
-                    help=f"git URL (default {DEFAULT_SOURCE}), a local monorepo "
-                         "checkout, or a local pstack dir")
-    ap.add_argument("--out", default=str(REPO / "drift-report"),
-                    help="directory for per-item .diff files (default: <repo>/drift-report/)")
+        "against this repo and report drift."
+    )
+    ap.add_argument(
+        "source",
+        nargs="?",
+        default=DEFAULT_SOURCE,
+        help=f"git URL (default {DEFAULT_SOURCE}), a local monorepo "
+        "checkout, or a local pstack dir",
+    )
+    ap.add_argument(
+        "--out",
+        default=str(REPO / "drift-report"),
+        help="directory for per-item .diff files (default: <repo>/drift-report/)",
+    )
     args = ap.parse_args()
     out = pathlib.Path(args.out).expanduser().resolve()
 
@@ -382,7 +495,11 @@ def main() -> int:
         try:
             commit = subprocess.run(
                 ["git", "-C", str(pstack), "rev-parse", "--short", "HEAD"],
-                check=True, capture_output=True, text=True, timeout=10).stdout.strip()
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
         except Exception:
             pass
 
@@ -392,11 +509,27 @@ def main() -> int:
             up_root = mapped / kind
             repo_root = REPO / kind
             if item_is_dir:
-                up_names = {p.name for p in up_root.iterdir() if p.is_dir()} if up_root.is_dir() else set()
-                repo_names = {p.name for p in repo_root.iterdir() if p.is_dir()} if repo_root.is_dir() else set()
+                up_names = (
+                    {p.name for p in up_root.iterdir() if p.is_dir()}
+                    if up_root.is_dir()
+                    else set()
+                )
+                repo_names = (
+                    {p.name for p in repo_root.iterdir() if p.is_dir()}
+                    if repo_root.is_dir()
+                    else set()
+                )
             else:
-                up_names = {p.name for p in up_root.iterdir() if p.is_file()} if up_root.is_dir() else set()
-                repo_names = {p.name for p in repo_root.iterdir() if p.is_file()} if repo_root.is_dir() else set()
+                up_names = (
+                    {p.name for p in up_root.iterdir() if p.is_file()}
+                    if up_root.is_dir()
+                    else set()
+                )
+                repo_names = (
+                    {p.name for p in repo_root.iterdir() if p.is_file()}
+                    if repo_root.is_dir()
+                    else set()
+                )
             for name in sorted(up_names | repo_names):
                 up_dir = up_root / name
                 repo_dir = repo_root / name
@@ -411,14 +544,21 @@ def main() -> int:
                     up_files = rel_files(up_dir)
                     repo_files = rel_files(repo_dir)
                     pairs = [
-                        (f"{kind}/{name}/{rel}",
-                         up_dir / rel if rel in up_files else None,
-                         repo_dir / rel if rel in repo_files else None)
-                        for rel in sorted(up_files | repo_files)]
+                        (
+                            f"{kind}/{name}/{rel}",
+                            up_dir / rel if rel in up_files else None,
+                            repo_dir / rel if rel in repo_files else None,
+                        )
+                        for rel in sorted(up_files | repo_files)
+                    ]
                 else:  # agent item is a single file
-                    pairs = [(f"{kind}/{name}",
-                              up_dir if up_dir.is_file() else None,
-                              repo_dir if repo_dir.is_file() else None)]
+                    pairs = [
+                        (
+                            f"{kind}/{name}",
+                            up_dir if up_dir.is_file() else None,
+                            repo_dir if repo_dir.is_file() else None,
+                        )
+                    ]
                 diff_parts = []
                 for label, up_p, repo_p in pairs:
                     la = f"upstream (mapped): {label}"
@@ -428,14 +568,23 @@ def main() -> int:
                         if a != b:
                             diff_parts.append(unified_diff(a, b, la, lb))
                     elif up_p is not None:
-                        diff_parts.append(unified_diff(file_text(up_p), "", la, "/dev/null"))
+                        diff_parts.append(
+                            unified_diff(file_text(up_p), "", la, "/dev/null")
+                        )
                     else:
-                        diff_parts.append(unified_diff("", file_text(repo_p), "/dev/null", lb))
+                        diff_parts.append(
+                            unified_diff("", file_text(repo_p), "/dev/null", lb)
+                        )
                 if status is None:
                     status = "CHANGED" if diff_parts else "UNCHANGED"
+                if status == "ADDED-UPSTREAM" and f"{kind}/{name}" in SKIPPED:
+                    status = "SKIPPED"
                 semantic_reasons = [
-                    SEMANTIC[label] for label, _, _ in pairs if label in SEMANTIC]
-                results.append((kind, name, status, "\n".join(diff_parts), semantic_reasons))
+                    SEMANTIC[label] for label, _, _ in pairs if label in SEMANTIC
+                ]
+                results.append(
+                    (kind, name, status, "\n".join(diff_parts), semantic_reasons)
+                )
 
         # ---- write diff files ----------------------------------------------
         out.mkdir(parents=True, exist_ok=True)
@@ -451,7 +600,13 @@ def main() -> int:
 
         # ---- console report --------------------------------------------------
         def counts(kind):
-            c = {"UNCHANGED": 0, "CHANGED": 0, "ADDED-UPSTREAM": 0, "PORT-ONLY": 0}
+            c = {
+                "UNCHANGED": 0,
+                "CHANGED": 0,
+                "ADDED-UPSTREAM": 0,
+                "PORT-ONLY": 0,
+                "SKIPPED": 0,
+            }
             for k, _, s, _, _ in results:
                 if k == kind:
                     c[s] += 1
@@ -464,8 +619,11 @@ def main() -> int:
         print()
         for kind in ("skills", "agents"):
             c = counts(kind)
-            print(f"  {kind}: {c['UNCHANGED']} unchanged, {c['CHANGED']} changed, "
-                  f"{c['ADDED-UPSTREAM']} added-upstream, {c['PORT-ONLY']} port-only")
+            print(
+                f"  {kind}: {c['UNCHANGED']} unchanged, {c['CHANGED']} changed, "
+                f"{c['ADDED-UPSTREAM']} added-upstream, {c['SKIPPED']} skipped, "
+                f"{c['PORT-ONLY']} port-only"
+            )
         print()
         print(f"  diffs written to {out} ({diff_count} file(s))")
         print()
@@ -473,10 +631,14 @@ def main() -> int:
             if status == "UNCHANGED":
                 continue
             line = f"{status:<15} {kind}/{name}"
-            if reasons:
+            if status == "SKIPPED":
+                line += f"  [SKIPPED] {SKIPPED[f'{kind}/{name}']}"
+            elif reasons:
                 shown = "; ".join(reasons[:3])
                 if len(reasons) > 3:
-                    shown += f"; +{len(reasons) - 3} more file(s) (see {kind}-{name}.diff)"
+                    shown += (
+                        f"; +{len(reasons) - 3} more file(s) (see {kind}-{name}.diff)"
+                    )
                 line += f"  [SEMANTIC] {shown}"
             print(line)
         return 0

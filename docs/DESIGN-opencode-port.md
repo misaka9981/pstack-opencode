@@ -1,11 +1,18 @@
 # pstack → opencode port - design
 
 Data: 2026-08-31
-Source: the pstack ZCode port (this repo's base; upstream [cursor/plugins/pstack](https://github.com/cursor/plugins/tree/main/pstack) v0.14.1, MIT, by Lauren Tan (poteto)). Pristine baseline committed before any change (see git history).
+Source: the pstack ZCode port (this repo's base; upstream [cursor/plugins/pstack](https://github.com/cursor/plugins/tree/main/pstack) v0.14.1, later synced to v0.15.5 (see the update note below), MIT, by Lauren Tan (poteto)). Pristine baseline committed before any change (see git history).
+
+## Update: upstream 0.15.5 sync (2026-09-27)
+
+- Ported the upstream 0.14.1 -> 0.15.5 delta: new principles `attack-the-premise` and `test-behavior-not-implementation`; the `how` skill lost its retired critics; `multi-phase-plan` became a self-contained checklist driven by the new `scripts/check-plan.mjs`; the PR playbooks (`shipping`, `autopilot-full`, `autopilot-stack`, `babysit`, `opening-a-pr`) became forge-neutral (`gh` by default, `origin` when available; Graphite no longer required); `setup-pstack` gained a reasoning budget.
+- `make-bot-ui` is intentionally not ported (Cursor webhook routines / Grok Bot); `check-upstream.py` reports it SKIPPED.
+- Upstream marks every skill manual-only as of 0.15.5, so the port has no model-invocable skills. The V1 deny snippet now lists all 46.
+- The drift-check source default moved to `github.com/cursor/plugins` (the official plugin); `backnotprop/pstack` was a mirror and stalled at 0.15.2.
 
 ## Goal
 
-Make the repo a standalone, installable, generic opencode port: 44 skills (4 model-invocable, 40 manual-only), 4 agents (`poteto-agent`, `comment-sicko`, `code-reviewer`, `code-architect`), installable on both opencode V1 and opencode2 (beta), with the manual-only distinction honored wherever the harness can honor it.
+Make the repo a standalone, installable, generic opencode port: 46 skills (all manual-only as of upstream 0.15.5), 4 agents (`poteto-agent`, `comment-sicko`, `code-reviewer`, `code-architect`), installable on both opencode V1 and opencode2 (beta), with the manual-only distinction honored wherever the harness can honor it.
 
 ## Approach: fork of the ZCode port, minus the harness packaging
 
@@ -24,7 +31,7 @@ Alternatives rejected:
 | `~/.zcode/pstack-roles.md` (roles file) | `~/.config/opencode/pstack-roles.md` (same shape, same on-demand read semantics) |
 | Subagent types (`general-purpose`, `Explore`, plugin-contributed types) | opencode built-ins (`build`, `plan`, `general`, `explore`) + pstack's own agents from `agents/` |
 | Per-subagent model: not available (session model only) | available: `agent.<name>.model` in `opencode.json`, or `model` frontmatter in the agent file (frontmatter wins). `/setup-pstack` gained an optional per-role model step on top of the type mapping |
-| Manual-only skills: frontmatter `disable-model-invocation` ignored by the harness | V1: ignored (all 44 advertised; see gap below). V2: new frontmatter `metadata: opencode/autoinvoke: false` on the 40 manual-only skills |
+| Manual-only skills: frontmatter `disable-model-invocation` ignored by the harness | V1: ignored (all 46 advertised; see gap below). V2: new frontmatter `metadata: opencode/autoinvoke: false` on the 46 manual-only skills |
 | Scheduled automations (ZCode's cron tools) | none: opencode has no equivalent, so the overnight/autonomous-run material documents an OS-level wake (a system cron entry or launchd agent running `opencode run` headless) |
 
 ### Lesson carried over: diversity by type, not model
@@ -35,16 +42,16 @@ The ZCode port's core adaptation - multi-model panels becoming N subagents of th
 
 The `skills/` and `agents/` content is harness-neutral text: no V1/V2 branching inside skill bodies. Version differences are handled at the edges:
 
-1. **Frontmatter is the V2 seam.** The 40 manual-only skills carry both the legacy `disable-model-invocation: true` (harmless on V2, documents intent) and `metadata: opencode/autoinvoke: false` (honored by V2). V1 ignores both.
+1. **Frontmatter is the V2 seam.** The 46 manual-only skills carry both the legacy `disable-model-invocation: true` (harmless on V2, documents intent) and `metadata: opencode/autoinvoke: false` (honored by V2). V1 ignores both.
 2. **The installer is the V1 seam.** Both versions find skills/agents in the same directories; `install.sh` targets them.
 3. **The snippet is the V1 strictness seam** (below).
-4. **Slash commands are explicit on V2.** The current opencode2 beta lists a skill in the TUI's `/` palette only when its frontmatter sets `slash: true` (no default is applied when the key is omitted, despite the docs claiming a default of true). 23 skills set it: the 4 model-invocable ones plus 19 manual-only workflow skills, per the upstream README's slash usage. The 21 `principle-*` skills do not set it and are reached via the `/skills` dialog. V1 ignores the key and never lists skills in the `/` palette (the TUI filters skill-sourced commands out by design); use the `/skills` dialog or ask in chat.
+4. **Slash commands are explicit on V2.** The current opencode2 beta lists a skill in the TUI's `/` palette only when its frontmatter sets `slash: true` (no default is applied when the key is omitted, despite the docs claiming a default of true). 23 workflow skills set it, per the upstream README's slash usage (upstream marks every skill manual-only as of 0.15.5, so none are model-invocable). The 23 `principle-*` skills do not set it and are reached via the `/skills` dialog. V1 ignores the key and never lists skills in the `/` palette (the TUI filters skill-sourced commands out by design); use the `/skills` dialog or ask in chat.
 
 ## The V1 manual-only gap, and the snippet
 
 V1 advertises every installed skill to the model; there is no frontmatter mechanism to opt a skill out. Its only mechanism is per-agent skill permission: `permission: { "skill": { "<name>": "deny" } }` hides a skill from the model's advertised list while explicit user invocation (`/<name>`) still works.
 
-`snippets/v1-manual-only.jsonc` generates that deny list for exactly the 40 manual-only skills (names taken from each skill's frontmatter `name`, verified equal to the directory name for all 44). It is opt-in, per-agent (the snippet shows `build`, the primary agent; users repeat the block for other primary agents), a no-op on opencode2, and removing a line re-exposes that skill.
+`snippets/v1-manual-only.jsonc` generates that deny list for exactly the 46 manual-only skills (names taken from each skill's frontmatter `name`, verified equal to the directory name for all 46). It is opt-in, per-agent (the snippet shows `build`, the primary agent; users repeat the block for other primary agents), a no-op on opencode2, and removing a line re-exposes that skill.
 
 ## What was skipped
 
@@ -55,7 +62,7 @@ V1 advertises every installed skill to the model; there is no frontmatter mechan
 ## Known interactions
 
 - Users who already have `tdd` or `teach` skills in `~/.config/opencode/skills/` (or project skill dirs) will have pstack's copies overwrite them on install, since the installer replaces same-named entries. That is intended (pstack's are the ported flavors), but it is a merge with overwrite semantics, not a union.
-- All 44 skills + 4 agents enter the global skill/agent list (same footprint as superpowers on V1; 40 hidden from the model on V2).
+- All 46 skills + 4 agents enter the global skill/agent list (same footprint as superpowers on V1; 46 hidden from the model on V2).
 
 ## Install (end user)
 
@@ -67,7 +74,7 @@ V1 advertises every installed skill to the model; there is no frontmatter mechan
 
 ## Verification
 
-- `bash -n install.sh` clean; installer tested against a scratch prefix: 44 skills + 4 agents installed, foreign entries untouched, `--link` mode produces working symlinks, re-run is idempotent.
+- `bash -n install.sh` clean; installer tested against a scratch prefix: 46 skills + 4 agents installed, foreign entries untouched, `--link` mode produces working symlinks, re-run is idempotent.
 - `snippets/v1-manual-only.jsonc` parses after comment stripping (`python3 -m json.tool`); 40 entries, all `deny`.
-- Frontmatter `name` equals the directory name for all 44 skills (checked programmatically).
+- Frontmatter `name` equals the directory name for all 46 skills (checked programmatically).
 - `rg -i "zcode|cursor" . -g '!skills/' -g '!agents/'` leaves only intentional historical references: this doc's lineage note, the README's, and `automations/benny/` (kept for reference, not ported). Inside skills/agents the survivors are all final skill content: `watch-pr`'s `PSTACK_PR_AUTHOR` default `zcode`, `ZCODE_AUTOMATION_ID`/`CURSOR_AUTOMATION_ID` markers, and bot-author detection for `cursor`/`zcode` (must keep matching the author names the bots actually push as), the upstream `@cursor-skill/poteto-mode-tools` package name, and GraphQL `endCursor` pagination (false positive).

@@ -1,5 +1,5 @@
 {
-  // pstack: make the 40 manual-only skills invisible to the model on opencode V1.
+  // pstack: make the 46 manual-only skills invisible to the model on opencode V1.
   //
   // V1 has no frontmatter mechanism for manual-only skills, so every installed
   // skill is advertised to the model. This fragment uses the one mechanism V1
@@ -26,10 +26,12 @@
           "bro": "deny",
           "create-verification-skill": "deny",
           "figure-it-out": "deny",
+          "how": "deny",
           "interrogate": "deny",
           "maintain-verification-skill": "deny",
           "no-comments": "deny",
           "poteto-mode": "deny",
+          "principle-attack-the-premise": "deny",
           "principle-boundary-discipline": "deny",
           "principle-build-the-lever": "deny",
           "principle-encode-lessons-in-structure": "deny",
@@ -50,6 +52,7 @@
           "principle-separate-before-serializing-shared-state": "deny",
           "principle-sequence-verifiable-units": "deny",
           "principle-subtract-before-you-add": "deny",
+          "principle-test-behavior-not-implementation": "deny",
           "principle-type-system-discipline": "deny",
           "recall": "deny",
           "reflect": "deny",
@@ -58,7 +61,10 @@
           "swarm": "deny",
           "tdd": "deny",
           "teach": "deny",
-          "technical-writing": "deny"
+          "technical-writing": "deny",
+          "typescript-best-practices": "deny",
+          "unslop": "deny",
+          "why": "deny"
         }
       }
     }

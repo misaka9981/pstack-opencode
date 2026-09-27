@@ -18,9 +18,9 @@ Run:
 /setup-pstack
 ```
 
-[`/setup-pstack`](../../skills/setup-pstack/SKILL.md) detects the subagent types available in your session (built-ins like `general`, `explore`, `build`, `plan`, plus pstack's own agents like `poteto-agent`), shows you each role (code delegates, judgment, the review panels), and asks what you want. Answer the questions. It writes `~/.config/opencode/pstack-roles.md`, a small file every pstack skill reads.
+[`/setup-pstack`](../../skills/setup-pstack/SKILL.md) detects the subagent types available in your session (built-ins like `general`, `explore`, `build`, `plan`, plus pstack's own agents like `poteto-agent`), asks for a reasoning budget, shows you each role (code delegates, judgment, the review panels), and asks what you want. Answer the questions. It writes `~/.config/opencode/pstack-roles.md`, a small file every pstack skill reads.
 
-opencode runs every subagent on the session model unless its agent file or config sets a model, so what the roles file configures is the subagent type per role - that is where the diversity comes from. Setup can also write per-role model overrides into `opencode.json` if you want them. You only override what you care about. A role with no line in the file keeps the skill's default. To restore a default later, delete that role's line, or just run `/setup-pstack` again.
+opencode runs every subagent on the session model unless its agent file or config sets a model, so what the roles file configures is the subagent type per role - that is where the diversity comes from. Setup can also write per-role model overrides into `opencode.json` if you want them, applying the budget as the model's reasoning variant. You only override what you care about. A role with no line in the file keeps the skill's default. To restore a default later, delete that role's line, or just run `/setup-pstack` again.
 
 For a panel role the value is a list, and one subagent runs per entry, so the list length sets the panel size. Setup also configures `swarm workers`, the default type for every `/swarm` worker unless a race names a type for each arm.
 
@@ -40,7 +40,7 @@ Pick something real but small, and describe it the way you'd describe it to a co
 /poteto-mode add a --json flag to this command. text output stays byte-identical. verify both.
 ```
 
-Watch the todo list. The first item is always "read the Principles section". The rest are the matched playbook's steps copied in, the Feature playbook for this prompt. If `/poteto-mode` skips a step, the step stays in the list with `skip: <reason>`, so you can see what it chose not to do.
+Watch the todo list. Its first items are the matched playbook's steps copied in, the Feature playbook for this prompt. If `/poteto-mode` skips a step, the step stays in the list with `skip: <reason>`, so you can see what it chose not to do.
 
 From here you can type normal follow-ups. `/poteto-mode` is sticky. It stays on for the conversation until you opt out by saying so.
 
