@@ -1,5 +1,7 @@
 # pstack (opencode port)
 
+> **Archived.** opencode is no longer a pstack target harness here. Use [open-pstack](https://github.com/misaka9981/open-pstack), which serves Claude Code, Codex, and Pi from one shared skill tree.
+
 > **this is an opencode port of [poteto's pstack](https://github.com/cursor/plugins/tree/main/pstack).** all credit for the skills, playbooks and principles goes to [poteto](https://x.com/poteto); the code is built off of the [ZCode port](https://github.com/Luks3110/pstack-zcode), and this repo swaps the packaging for opencode (directory-based install, subagent types, per-role models).
 
 i'm [poteto](https://x.com/poteto). i'm not a president or ceo, but i've worked with millions of lines of code at Meta, Netflix, and Cursor. i'm also on the react core team where i help build and maintain react compiler.
